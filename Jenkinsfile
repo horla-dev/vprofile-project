@@ -1,121 +1,134 @@
+def COLOR_MAP = [
+    'SUCCESS': 'good', 
+    'FAILURE': 'danger',
+]
+
+
 pipeline {
-    
-	agent any
-/*	
-	tools {
-        maven "maven3"
+    agent "any"
+    tools {
+        maven "maven"
+        jdk "jdk17"
     }
-*/	
+
     environment {
-        NEXUS_VERSION = "nexus3"
-        NEXUS_PROTOCOL = "http"
-        NEXUS_URL = "172.31.40.209:8081"
-        NEXUS_REPOSITORY = "vprofile-release"
-	NEXUS_REPO_ID    = "vprofile-release"
-        NEXUS_CREDENTIAL_ID = "nexuslogin"
-        ARTVERSION = "${env.BUILD_ID}"
+        awsCreds = "ecr:eu-north-1:awstoken"
+        imageName = "864899862790.dkr.ecr.eu-north-1.amazonaws.com/vprofile"
+        awsRegistry = "https://864899862790.dkr.ecr.eu-north-1.amazonaws.com"
+        cluster = "vpro-cluster"
+        service = "vprofiles-service"
     }
-	
+
     stages{
-        
-        stage('BUILD'){
-            steps {
-                sh 'mvn clean install -DskipTests'
+
+        stage("Fetch code") {
+            steps{
+                git branch: 'docker', url: 'https://github.com/hkhcoder/vprofile-project.git'
+            }
+        }
+
+        stage("Build Artifacts") {
+            steps{
+                sh 'mvn install -Dskiptest'
+
             }
             post {
-                success {
-                    echo 'Now Archiving...'
-                    archiveArtifacts artifacts: '**/target/*.war'
+                success{
+                    echo 'Archiving Artifacts'
+                    archiveArtifacts artifacts: '**/*.war'
                 }
             }
         }
 
-	stage('UNIT TEST'){
-            steps {
+        stage("Unit Test") {
+            steps{
                 sh 'mvn test'
             }
         }
 
-	stage('INTEGRATION TEST'){
-            steps {
-                sh 'mvn verify -DskipUnitTests'
-            }
-        }
-		
-        stage ('CODE ANALYSIS WITH CHECKSTYLE'){
+        stage("checkstyle Analysis") {
             steps {
                 sh 'mvn checkstyle:checkstyle'
             }
-            post {
-                success {
-                    echo 'Generated Analysis Result'
+        }
+
+        stage("Sonar Analysis") {
+            environment {
+                scannerHome = tool 'sonar'
+            }
+
+            steps{
+                withSonarQubeEnv('sonarserver') {
+                    sh '''
+                         ${scannerHome}/bin/sonar-scanner -Dsonar.projectKey=vprofile \
+                        -Dsonar.projectName=vprofile \
+                        -Dsonar.projectVersion=1.0 \
+                        -Dsonar.sources=src/ \
+                        -Dsonar.java.binaries=target/test-classes/com/visualpathit/account/controllerTest/ \
+                        -Dsonar.junit.reportsPath=target/surefire-reports/ \
+                        -Dsonar.jacoco.reportsPath=target/jacoco.exec \
+                        -Dsonar.java.checkstyle.reportPaths=target/checkstyle-result.xml
+                    '''
+                }
+
+            }
+        }
+
+        stage("Quality Gate") {
+            steps{
+                timeout( time: 1, unit: "HOURS") {
+                    waitForQualityGate abortPipeline: true
+
+                }
+
+            }
+        }
+
+        stage('Build docker Image'){
+            steps{
+                script{
+                    dockerImage = docker.build( imageName + ":$BUILD_NUMBER", "./Docker-files/app/multistage") 
                 }
             }
         }
 
-        stage('CODE ANALYSIS with SONARQUBE') {
-          
-		  environment {
-             scannerHome = tool 'sonarscanner4'
-          }
+        stage("Push to ECR") {
+            steps{
+                script{
 
-          steps {
-            withSonarQubeEnv('sonar-pro') {
-               sh '''${scannerHome}/bin/sonar-scanner -Dsonar.projectKey=vprofile \
-                   -Dsonar.projectName=vprofile-repo \
-                   -Dsonar.projectVersion=1.0 \
-                   -Dsonar.sources=src/ \
-                   -Dsonar.java.binaries=target/test-classes/com/visualpathit/account/controllerTest/ \
-                   -Dsonar.junit.reportsPath=target/surefire-reports/ \
-                   -Dsonar.jacoco.reportsPath=target/jacoco.exec \
-                   -Dsonar.java.checkstyle.reportPaths=target/checkstyle-result.xml'''
-            }
-
-            timeout(time: 10, unit: 'MINUTES') {
-               waitForQualityGate abortPipeline: true
-            }
-          }
-        }
-
-        stage("Publish to Nexus Repository Manager") {
-            steps {
-                script {
-                    pom = readMavenPom file: "pom.xml";
-                    filesByGlob = findFiles(glob: "target/*.${pom.packaging}");
-                    echo "${filesByGlob[0].name} ${filesByGlob[0].path} ${filesByGlob[0].directory} ${filesByGlob[0].length} ${filesByGlob[0].lastModified}"
-                    artifactPath = filesByGlob[0].path;
-                    artifactExists = fileExists artifactPath;
-                    if(artifactExists) {
-                        echo "*** File: ${artifactPath}, group: ${pom.groupId}, packaging: ${pom.packaging}, version ${pom.version} ARTVERSION";
-                        nexusArtifactUploader(
-                            nexusVersion: NEXUS_VERSION,
-                            protocol: NEXUS_PROTOCOL,
-                            nexusUrl: NEXUS_URL,
-                            groupId: pom.groupId,
-                            version: ARTVERSION,
-                            repository: NEXUS_REPOSITORY,
-                            credentialsId: NEXUS_CREDENTIAL_ID,
-                            artifacts: [
-                                [artifactId: pom.artifactId,
-                                classifier: '',
-                                file: artifactPath,
-                                type: pom.packaging],
-                                [artifactId: pom.artifactId,
-                                classifier: '',
-                                file: "pom.xml",
-                                type: "pom"]
-                            ]
-                        );
-                    } 
-		    else {
-                        error "*** File: ${artifactPath}, could not be found";
+                    docker.withRegistry(awsRegistry, awsCreds ){
+                        dockerImage.push("latest")
+                        dockerImage.push("$BUILD_NUMBER")
                     }
                 }
             }
         }
 
+        stage(" Clean up") {
+            steps{
+                sh 'docker rmi -f $(docker images -a -q)'
+            }
+        }
 
+        stage("Deploy to ECS") {
+            steps{
+                withAWS(credentials: 'awstoken', region: 'eu-north-1'){
+            
+                sh 'aws ecs update-service --service $service --cluster $cluster --force-new-deployment'
+
+                }
+            }
+        }
     }
 
+    post {
+        always{
+            echo 'Sending Notification'
+            slackSend channel: '#jenkinsci-cicd',
+            color: COLOR_MAP[currentBuild.currentResult],
+            message: "*${currentBuild.currentResult}:* Job ${env.JOB_NAME} build ${env.BUILD_NUMBER} \n More info at: ${env.BUILD_URL}"
 
+        }
+    }
+        
 }
