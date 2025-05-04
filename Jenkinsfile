@@ -16,7 +16,7 @@ pipeline {
         imageName = "864899862790.dkr.ecr.eu-north-1.amazonaws.com/vprofile"
         awsRegistry = "https://864899862790.dkr.ecr.eu-north-1.amazonaws.com"
         cluster = "vpro-cluster"
-        service = "vprofiles-service"
+        service = "vprofile-td-service-gbokjqxu"
     }
 
     stages{
