@@ -16,7 +16,7 @@ pipeline {
         imageName = "864899862790.dkr.ecr.eu-north-1.amazonaws.com/vprofile"
         awsRegistry = "https://864899862790.dkr.ecr.eu-north-1.amazonaws.com"
         cluster = "vpro-cluster"
-        service = "vprofile-td-service-gbokjqxu"
+        service = "vprofile-servi"
     }
 
     stages{
@@ -124,7 +124,7 @@ pipeline {
     post {
         always{
             echo 'Sending Notification'
-            slackSend channel: '#jenkinsci-cicd',
+            slackSend channel: '#jenkins-cicd',
             color: COLOR_MAP[currentBuild.currentResult],
             message: "*${currentBuild.currentResult}:* Job ${env.JOB_NAME} build ${env.BUILD_NUMBER} \n More info at: ${env.BUILD_URL}"
 
